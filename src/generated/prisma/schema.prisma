@@ -1,0 +1,367 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User and Authentication
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String // Hashed
+  role      UserRole @default(INFLUENCER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Profile Relations
+  influencer Influencer?
+  brand      Brand?
+
+  // Common Relations
+  sentMessages     Message[]      @relation("SentMessages")
+  receivedMessages Message[]      @relation("ReceivedMessages")
+  notifications    Notification[]
+  walletId         String?        @unique
+  wallet           Wallet?        @relation(fields: [walletId], references: [id])
+}
+
+enum UserRole {
+  ADMIN
+  INFLUENCER
+  BRAND
+}
+
+// Influencer Profile
+model Influencer {
+  id         String  @id @default(cuid())
+  userId     String  @unique
+  user       User    @relation(fields: [userId], references: [id])
+  firstName  String
+  lastName   String
+  bio        String? @db.Text
+  location   String?
+  website    String?
+  avatar     String?
+  coverImage String?
+
+  // Social Media Profiles
+  socialAccounts SocialAccount[]
+
+  // Content & Engagement
+  niches       Niche[]
+  contentTypes ContentType[]
+  analytics    AnalyticsData[]
+
+  // Business Relations
+  deals           Deal[]
+  collaborations  Collaboration[]
+  receivedReviews Review[]        @relation("InfluencerReceivedReviews")
+
+  // Metrics
+  totalEarnings Float @default(0)
+  rating        Float @default(0)
+  ratingCount   Int   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Brand Profile
+model Brand {
+  id          String  @id @default(cuid())
+  userId      String  @unique
+  user        User    @relation(fields: [userId], references: [id])
+  companyName String
+  industry    String
+  description String? @db.Text
+  website     String?
+  logo        String?
+  coverImage  String?
+
+  // Business Relations
+  deals          Deal[]
+  collaborations Collaboration[]
+  givenReviews   Review[]        @relation("BrandGivenReviews")
+
+  // Verification
+  isVerified      Boolean @default(false)
+  verificationDoc String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Social Media Accounts
+model SocialAccount {
+  id           String     @id @default(cuid())
+  influencerId String
+  influencer   Influencer @relation(fields: [influencerId], references: [id])
+  platform     Platform
+  username     String
+  url          String
+  followers    Int        @default(0)
+  engagement   Float      @default(0)
+  isVerified   Boolean    @default(false)
+  lastUpdated  DateTime   @default(now())
+
+  @@unique([influencerId, platform])
+}
+
+enum Platform {
+  INSTAGRAM
+  TIKTOK
+  YOUTUBE
+  TWITTER
+  LINKEDIN
+  FACEBOOK
+}
+
+// Content Categories
+model Niche {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  influencers Influencer[]
+  deals       Deal[]
+}
+
+model ContentType {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  influencers Influencer[]
+  deals       Deal[]
+}
+
+// Deals & Collaborations
+model Deal {
+  id           String     @id @default(cuid())
+  brandId      String
+  brand        Brand      @relation(fields: [brandId], references: [id])
+  influencerId String
+  influencer   Influencer @relation(fields: [influencerId], references: [id])
+
+  // Deal Details
+  title        String
+  description  String     @db.Text
+  requirements String     @db.Text
+  deliverables String     @db.Text
+  budget       Float
+  timeline     Int // Duration in days
+  status       DealStatus @default(DRAFT)
+
+  // Categories
+  niches       Niche[]
+  contentTypes ContentType[]
+
+  // Collaboration
+  collaboration Collaboration?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum DealStatus {
+  DRAFT
+  PENDING
+  ACCEPTED
+  REJECTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Collaboration {
+  id           String     @id @default(cuid())
+  dealId       String     @unique
+  deal         Deal       @relation(fields: [dealId], references: [id])
+  brandId      String
+  brand        Brand      @relation(fields: [brandId], references: [id])
+  influencerId String
+  influencer   Influencer @relation(fields: [influencerId], references: [id])
+
+  // Collaboration Details
+  startDate DateTime
+  endDate   DateTime?
+  status    CollaborationStatus @default(IN_PROGRESS)
+
+  // Deliverables Tracking
+  deliverables Deliverable[]
+
+  // Payment
+  paymentStatus PaymentStatus @default(PENDING)
+  milestones    Milestone[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum CollaborationStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Deliverable {
+  id              String            @id @default(cuid())
+  collaborationId String
+  collaboration   Collaboration     @relation(fields: [collaborationId], references: [id])
+  description     String
+  dueDate         DateTime
+  status          DeliverableStatus @default(PENDING)
+  submissionUrl   String?
+  feedback        String?           @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum DeliverableStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+// Payments & Transactions
+model Wallet {
+  id       String @id @default(cuid())
+  user     User?
+  balance  Float  @default(0)
+  currency String @default("USD")
+
+  transactions Transaction[]
+  milestones   Milestone[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Transaction {
+  id          String            @id @default(cuid())
+  walletId    String
+  wallet      Wallet            @relation(fields: [walletId], references: [id])
+  amount      Float
+  type        TransactionType
+  status      TransactionStatus @default(PENDING)
+  description String?
+
+  createdAt DateTime @default(now())
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  PAYMENT
+  REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+model Milestone {
+  id              String        @id @default(cuid())
+  collaborationId String
+  collaboration   Collaboration @relation(fields: [collaborationId], references: [id])
+  walletId        String
+  wallet          Wallet        @relation(fields: [walletId], references: [id])
+  amount          Float
+  description     String
+  dueDate         DateTime
+  status          PaymentStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+// Messaging & Notifications
+model Message {
+  id          String       @id @default(cuid())
+  senderId    String
+  sender      User         @relation("SentMessages", fields: [senderId], references: [id])
+  receiverId  String
+  receiver    User         @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  content     String       @db.Text
+  attachments Attachment[]
+  isRead      Boolean      @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+model Attachment {
+  id        String  @id @default(cuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id])
+  url       String
+  type      String
+  name      String
+  size      Int
+
+  createdAt DateTime @default(now())
+}
+
+model Notification {
+  id      String           @id @default(cuid())
+  userId  String
+  user    User             @relation(fields: [userId], references: [id])
+  type    NotificationType
+  title   String
+  content String
+  isRead  Boolean          @default(false)
+
+  createdAt DateTime @default(now())
+}
+
+enum NotificationType {
+  DEAL_PROPOSAL
+  MESSAGE
+  PAYMENT
+  REVIEW
+  SYSTEM
+}
+
+// Analytics & Metrics
+model AnalyticsData {
+  id           String     @id @default(cuid())
+  influencerId String
+  influencer   Influencer @relation(fields: [influencerId], references: [id])
+  platform     Platform
+  date         DateTime
+  followers    Int
+  engagement   Float
+  impressions  Int
+  clicks       Int
+
+  @@unique([influencerId, platform, date])
+}
+
+// Reviews & Ratings
+model Review {
+  id             String     @id @default(cuid())
+  fromBrandId    String
+  fromBrand      Brand      @relation("BrandGivenReviews", fields: [fromBrandId], references: [id])
+  toInfluencerId String
+  toInfluencer   Influencer @relation("InfluencerReceivedReviews", fields: [toInfluencerId], references: [id])
+  rating         Float
+  content        String     @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

@@ -1,23 +1,33 @@
+// src/app/api/profile/influencer/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { getAuth } from 'firebase-admin/auth';
-import '@/lib/firebase/admin'; // Import for side effects (initialization)
-
+import { auth } from '@/lib/firebase/admin';
+import { db } from '@/lib/db';
+import {
+  users,
+  influencers,
+  niches,
+  contentTypes,
+  influencersToNiches,
+  influencersToContentTypes
+} from '@/db/schema';
+import { eq, inArray, and, not } from 'drizzle-orm';
+import { v4 as uuidv4 } from 'uuid';
 
 export async function PUT(request: NextRequest) {
   try {
+    // Authentication
     const authorization = request.headers.get('Authorization');
     if (!authorization?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized: Missing token' }, { status: 401 });
     }
+    
     const token = authorization.split('Bearer ')[1];
-    const decodedToken = await getAuth().verifyIdToken(token);
+    const decodedToken = await auth.verifyIdToken(token);
     const userId = decodedToken.uid;
-
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    
+    console.log(`Update influencer profile: Request for user ${userId}`);
+    
+    // Parse request body
     const data = await request.json();
     const {
       firstName,
@@ -25,203 +35,223 @@ export async function PUT(request: NextRequest) {
       bio,
       location,
       website,
-      avatar, // Expecting URL string
-      coverImage, // Expecting URL string
-      niches, // Expecting array of niche names (strings)
-      contentTypes // Expecting array of content type names (strings)
+      avatar,
+      coverImage,
+      niches: nicheNamesInput = [],
+      contentTypes: contentTypeNamesInput = []
     } = data;
-
-    // Validate required fields
+    
+    // Validate inputs
     if (!firstName || !lastName) {
-      return NextResponse.json(
-        { error: 'First name and last name are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ 
+        error: 'First name and last name are required'
+      }, { status: 400 });
     }
-
-    // Find the influencer profile linked to the user
-    const influencer = await prisma.influencer.findFirst({
-      where: { userId: userId },
-      include: { // Include current relations to manage disconnects
-        niches: { select: { id: true, name: true } },
-        contentTypes: { select: { id: true, name: true } },
+    
+    if (!Array.isArray(nicheNamesInput) || !Array.isArray(contentTypeNamesInput)) {
+      return NextResponse.json({ 
+        error: 'Niches and contentTypes must be arrays'
+      }, { status: 400 });
+    }
+    
+    // Get current profile
+    const currentProfile = await db.query.influencers.findFirst({
+      where: eq(influencers.userId, userId),
+      with: {
+        influencersToNiches: {
+          with: {
+            niche: true
+          }
+        },
+        influencersToContentTypes: {
+          with: {
+            contentType: true
+          }
+        }
       }
     });
-
-    if (!influencer) {
-      return NextResponse.json(
-        { error: 'Influencer profile not found' },
-        { status: 404 }
-      );
-    }
-
-    // --- Handle Niches ---
-    // Define interfaces for better typing
-    interface NicheWithIdAndName {
-      id: string;
-      name: string;
+    
+    if (!currentProfile) {
+      return NextResponse.json({ 
+        error: 'Influencer profile not found' 
+      }, { status: 404 });
     }
     
-    interface ContentTypeWithIdAndName {
-      id: string;
-      name: string;
-    }
+    console.log(`Update influencer profile: Found profile with ID ${currentProfile.id}`);
     
-    const currentNicheNames: string[] = influencer.niches.map((n: NicheWithIdAndName) => n.name);
-    const nichesToConnect: { id: string }[] = [];
-    const nichesToDisconnect: { id: string }[] = [];
-    const nicheNamesToCreate: string[] = [];
-
-    // Find niches to connect/create
-    if (niches && Array.isArray(niches)) {
-        for (const nicheName of niches) {
-            if (!currentNicheNames.includes(nicheName)) {
-                const existingNiche = await prisma.niche.findFirst({ where: { name: nicheName } });
-                if (existingNiche) {
-                    nichesToConnect.push({ id: existingNiche.id });
-                } else {
-                    nicheNamesToCreate.push(nicheName); // Mark for creation
-                }
+    // Use transaction to ensure data consistency
+    const result = await db.transaction(async (tx) => {
+      // 1. Insert new niches if needed
+      const nicheInserts = nicheNamesInput
+        .filter(name => !currentProfile.influencersToNiches
+          .some(n => n.niche.name.toLowerCase() === name.toLowerCase()))
+        .map(name => ({
+          id: uuidv4(),
+          name: name
+        }));
+      
+      if (nicheInserts.length > 0) {
+        await tx.insert(niches)
+          .values(nicheInserts)
+          .onConflictDoNothing({ target: niches.name });
+      }
+      
+      // 2. Insert new content types if needed
+      const contentTypeInserts = contentTypeNamesInput
+        .filter(name => !currentProfile.influencersToContentTypes
+          .some(ct => ct.contentType.name.toLowerCase() === name.toLowerCase()))
+        .map(name => ({
+          id: uuidv4(),
+          name: name
+        }));
+      
+      if (contentTypeInserts.length > 0) {
+        await tx.insert(contentTypes)
+          .values(contentTypeInserts)
+          .onConflictDoNothing({ target: contentTypes.name });
+      }
+      
+      // 3. Get all required niche and content type IDs
+      const requiredNicheIds = await tx.select({ 
+        id: niches.id,
+        name: niches.name
+      })
+      .from(niches)
+      .where(inArray(niches.name, nicheNamesInput));
+      
+      const requiredContentTypeIds = await tx.select({ 
+        id: contentTypes.id,
+        name: contentTypes.name
+      })
+      .from(contentTypes)
+      .where(inArray(contentTypes.name, contentTypeNamesInput));
+      
+      // 4. Update the influencer profile
+      await tx.update(influencers)
+        .set({
+          firstName,
+          lastName,
+          bio: bio || null,
+          location: location || null,
+          website: website || null,
+          avatar: avatar || null,
+          coverImage: coverImage || null,
+          updatedAt: new Date()
+        })
+        .where(eq(influencers.id, currentProfile.id));
+      
+      // 5. Determine which niches to add/remove
+      const currentNicheIds = currentProfile.influencersToNiches.map(n => n.niche.id);
+      const requiredNicheIdValues = requiredNicheIds.map(n => n.id);
+      const nicheIdsToRemove = currentNicheIds.filter(id => !requiredNicheIdValues.includes(id));
+      
+      // 6. Remove niches that are no longer selected
+      if (nicheIdsToRemove.length > 0) {
+        await tx.delete(influencersToNiches)
+          .where(
+            and(
+              eq(influencersToNiches.influencerId, currentProfile.id),
+              inArray(influencersToNiches.nicheId, nicheIdsToRemove)
+            )
+          );
+      }
+      
+      // 7. Add new niches
+      const nichesToAdd = requiredNicheIds
+        .filter(niche => !currentProfile.influencersToNiches
+          .some(n => n.niche.id === niche.id))
+        .map(niche => ({
+          influencerId: currentProfile.id,
+          nicheId: niche.id
+        }));
+      
+      if (nichesToAdd.length > 0) {
+        await tx.insert(influencersToNiches)
+          .values(nichesToAdd)
+          .onConflictDoNothing();
+      }
+      
+      // 8. Do the same for content types
+      const currentContentTypeIds = currentProfile.influencersToContentTypes.map(ct => ct.contentType.id);
+      const requiredContentTypeIdValues = requiredContentTypeIds.map(ct => ct.id);
+      const contentTypeIdsToRemove = currentContentTypeIds.filter(id => 
+        !requiredContentTypeIdValues.includes(id));
+      
+      if (contentTypeIdsToRemove.length > 0) {
+        await tx.delete(influencersToContentTypes)
+          .where(
+            and(
+              eq(influencersToContentTypes.influencerId, currentProfile.id),
+              inArray(influencersToContentTypes.contentTypeId, contentTypeIdsToRemove)
+            )
+          );
+      }
+      
+      const contentTypesToAdd = requiredContentTypeIds
+        .filter(contentType => !currentProfile.influencersToContentTypes
+          .some(ct => ct.contentType.id === contentType.id))
+        .map(contentType => ({
+          influencerId: currentProfile.id,
+          contentTypeId: contentType.id
+        }));
+      
+      if (contentTypesToAdd.length > 0) {
+        await tx.insert(influencersToContentTypes)
+          .values(contentTypesToAdd)
+          .onConflictDoNothing();
+      }
+      
+      // 9. Fetch and return the updated profile
+      return await tx.query.influencers.findFirst({
+        where: eq(influencers.id, currentProfile.id),
+        with: {
+          influencersToNiches: {
+            with: {
+              niche: true
             }
-        }
-        // Find niches to disconnect
-        for (const currentNiche of influencer.niches) {
-            if (!niches.includes(currentNiche.name)) {
-                nichesToDisconnect.push({ id: currentNiche.id });
+          },
+          influencersToContentTypes: {
+            with: {
+              contentType: true
             }
+          },
+          socialAccounts: true
         }
-    }
-
-    // --- Handle Content Types ---
-    const currentContentTypeNames: string[] = influencer.contentTypes.map((ct: ContentTypeWithIdAndName) => ct.name);
-    const contentTypesToConnect: { id: string }[] = [];
-    const contentTypesToDisconnect: { id: string }[] = [];
-    const contentTypeNamesToCreate: string[] = [];
-
-    // Find content types to connect/create
-    if (contentTypes && Array.isArray(contentTypes)) {
-        for (const typeName of contentTypes) {
-            if (!currentContentTypeNames.includes(typeName)) {
-                const existingType = await prisma.contentType.findFirst({ where: { name: typeName } });
-                if (existingType) {
-                    contentTypesToConnect.push({ id: existingType.id });
-                } else {
-                    contentTypeNamesToCreate.push(typeName); // Mark for creation
-                }
-            }
-        }
-        // Find content types to disconnect
-        for (const currentType of influencer.contentTypes) {
-            if (!contentTypes.includes(currentType.name)) {
-                contentTypesToDisconnect.push({ id: currentType.id });
-            }
-        }
-    }
-
-    // --- Perform Update ---
-    // Use transaction to ensure atomicity, especially with create/connect/disconnect
-    // Define interfaces for better typing
-    interface NicheCreate {
-      name: string;
-    }
-
-    interface ContentTypeCreate {
-      name: string;
-    }
-
-    interface NicheConnect {
-      id: string;
-    }
-
-    interface ContentTypeConnect {
-      id: string;
-    }
-
-    interface UpdatedInfluencer {
-      id: string;
-      firstName: string;
-      lastName: string;
-      bio: string | null;
-      location: string | null;
-      website: string | null;
-      avatar: string | null;
-      coverImage: string | null;
-      niches: NicheWithIdAndName[];
-      contentTypes: ContentTypeWithIdAndName[];
-      socialAccounts: any[]; // Using any here to match existing return type
-    }
-
-    const updatedInfluencer: UpdatedInfluencer = await prisma.$transaction(async (tx: typeof prisma) => {
-        // 1. Create any new niches
-        if (nicheNamesToCreate.length > 0) {
-            await tx.niche.createMany({
-                data: nicheNamesToCreate.map((name: string): NicheCreate => ({ name })),
-                skipDuplicates: true, // In case of race conditions
-            });
-            // Fetch the newly created niches to get their IDs
-            const newlyCreatedNiches: NicheConnect[] = await tx.niche.findMany({
-                where: { name: { in: nicheNamesToCreate } },
-                select: { id: true }
-            });
-            nichesToConnect.push(...newlyCreatedNiches);
-        }
-
-        // 2. Create any new content types
-        if (contentTypeNamesToCreate.length > 0) {
-            await tx.contentType.createMany({
-                data: contentTypeNamesToCreate.map((name: string): ContentTypeCreate => ({ name })),
-                skipDuplicates: true,
-            });
-            const newlyCreatedTypes: ContentTypeConnect[] = await tx.contentType.findMany({
-                where: { name: { in: contentTypeNamesToCreate } },
-                select: { id: true }
-            });
-            contentTypesToConnect.push(...newlyCreatedTypes);
-        }
-
-        // 3. Update the influencer profile with connections/disconnections
-        return await tx.influencer.update({
-            where: { id: influencer.id },
-            data: {
-                firstName,
-                lastName,
-                bio: bio ?? influencer.bio, // Use existing if not provided
-                location: location ?? influencer.location,
-                website: website ?? influencer.website,
-                avatar: avatar ?? influencer.avatar, // Update URL
-                coverImage: coverImage ?? influencer.coverImage, // Update URL
-                niches: {
-                    connect: nichesToConnect,
-                    disconnect: nichesToDisconnect,
-                },
-                contentTypes: {
-                    connect: contentTypesToConnect,
-                    disconnect: contentTypesToDisconnect,
-                },
-            },
-            include: {
-                niches: { select: { id: true, name: true } },
-                contentTypes: { select: { id: true, name: true } },
-                socialAccounts: true
-            }
-        });
+      });
     });
-
+    
+    // Transform data for cleaner response
+    const updatedProfile = {
+      ...result,
+      // Transform niche join table to direct list of niches
+      niches: result?.influencersToNiches.map(join => join.niche) || [],
+      // Transform content type join table to direct list of content types
+      contentTypes: result?.influencersToContentTypes.map(join => join.contentType) || [],
+      // Remove join table data from response
+      influencersToNiches: undefined,
+      influencersToContentTypes: undefined
+    };
+    
     return NextResponse.json({
       status: 'success',
       message: 'Influencer profile updated successfully',
-      profile: updatedInfluencer
+      profile: updatedProfile
     });
-
+    
   } catch (error: any) {
     console.error('Error updating influencer profile:', error);
-     if (error.code === 'auth/id-token-expired') {
-        return NextResponse.json({ error: 'Authentication token expired' }, { status: 401 });
-    }
+    
+    // Handle specific error types
     if (error.code?.startsWith('auth/')) {
-        return NextResponse.json({ error: 'Authentication error' }, { status: 401 });
+      return NextResponse.json({ 
+        error: 'Authentication error', 
+        details: error.code 
+      }, { status: 401 });
     }
-    // Handle potential Prisma errors
-    return NextResponse.json({ error: 'Failed to update influencer profile' }, { status: 500 });
+    
+    return NextResponse.json({ 
+      error: 'Failed to update influencer profile', 
+      details: error.message || 'Unknown error'
+    }, { status: 500 });
   }
 }

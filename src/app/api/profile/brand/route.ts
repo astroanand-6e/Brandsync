@@ -1,83 +1,96 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { getAuth } from 'firebase-admin/auth';
-import '@/lib/firebase/admin'; // Import for side effects (initialization)
+import { auth } from '@/lib/firebase/admin';
+import { db } from '@/lib/db';
+import { brands } from '@/db/schema';
+import { eq } from 'drizzle-orm';
 
 export async function PUT(request: NextRequest) {
   try {
+    // Authentication
     const authorization = request.headers.get('Authorization');
     if (!authorization?.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized: Missing token' }, { status: 401 });
     }
+    
     const token = authorization.split('Bearer ')[1];
-    const decodedToken = await getAuth().verifyIdToken(token);
+    const decodedToken = await auth.verifyIdToken(token);
     const userId = decodedToken.uid;
-
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    
+    console.log(`Update brand profile: Request for user ${userId}`);
+    
+    // Parse request body
     const data = await request.json();
     const {
       companyName,
       industry,
       description,
       website,
-      logo, // Expecting URL string
-      coverImage, // Expecting URL string
-      verificationDoc // Expecting URL string for now
-      // isVerified is likely managed by an admin process, not directly by the user
+      logo,
+      coverImage,
+      verificationDoc
     } = data;
-
-    // Validate required fields
+    
+    // Basic validation
     if (!companyName || !industry) {
-      return NextResponse.json(
-        { error: 'Company name and industry are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ 
+        error: 'Company name and industry are required'
+      }, { status: 400 });
     }
-
-    // Find the brand profile linked to the user
-    const brand = await prisma.brand.findFirst({
-      where: { userId: userId },
+    
+    // Check if profile exists
+    const currentProfile = await db.query.brands.findFirst({
+      where: eq(brands.userId, userId)
     });
-
-    if (!brand) {
-      return NextResponse.json(
-        { error: 'Brand profile not found' },
-        { status: 404 }
-      );
+    
+    if (!currentProfile) {
+      return NextResponse.json({ 
+        error: 'Brand profile not found' 
+      }, { status: 404 });
     }
-
+    
+    console.log(`Update brand profile: Found profile with ID ${currentProfile.id}`);
+    
     // Update the brand profile
-    const updatedBrand = await prisma.brand.update({
-      where: { id: brand.id },
-      data: {
+    const updatedBrand = await db.update(brands)
+      .set({
         companyName,
         industry,
-        description: description ?? brand.description,
-        website: website ?? brand.website,
-        logo: logo ?? brand.logo, // Update URL
-        coverImage: coverImage ?? brand.coverImage, // Update URL
-        verificationDoc: verificationDoc ?? brand.verificationDoc // Update URL
-        // Do not allow user to set isVerified directly
-      },
-    });
-
+        description: description || null,
+        website: website || null,
+        logo: logo || null,
+        coverImage: coverImage || null,
+        verificationDoc: verificationDoc || null,
+        updatedAt: new Date()
+      })
+      .where(eq(brands.id, currentProfile.id))
+      .returning();
+    
+    if (!updatedBrand || updatedBrand.length === 0) {
+      return NextResponse.json({ 
+        error: 'Failed to update brand profile' 
+      }, { status: 500 });
+    }
+    
     return NextResponse.json({
       status: 'success',
       message: 'Brand profile updated successfully',
-      profile: updatedBrand
+      profile: updatedBrand[0]
     });
-
+    
   } catch (error: any) {
     console.error('Error updating brand profile:', error);
-     if (error.code === 'auth/id-token-expired') {
-        return NextResponse.json({ error: 'Authentication token expired' }, { status: 401 });
-    }
+    
+    // Handle specific error types
     if (error.code?.startsWith('auth/')) {
-        return NextResponse.json({ error: 'Authentication error' }, { status: 401 });
+      return NextResponse.json({ 
+        error: 'Authentication error', 
+        details: error.code 
+      }, { status: 401 });
     }
-    return NextResponse.json({ error: 'Failed to update brand profile' }, { status: 500 });
+    
+    return NextResponse.json({ 
+      error: 'Failed to update brand profile', 
+      details: error.message || 'Unknown error'
+    }, { status: 500 });
   }
 }

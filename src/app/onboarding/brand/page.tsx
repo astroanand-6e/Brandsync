@@ -57,11 +57,14 @@ export default function BrandOnboarding() {
     setError('');
     
     try {
+      const token = await user.getIdToken(); // Get auth token
+
       // Create brand profile
-      await fetch('/api/onboarding/brand', {
+      const response = await fetch('/api/onboarding/brand', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` // Send token in header
         },
         body: JSON.stringify({
           userId: user.uid,
@@ -72,6 +75,15 @@ export default function BrandOnboarding() {
         }),
       });
       
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error || `Failed with status: ${response.status}`;
+        throw new Error(errorMessage);
+      }
+      
+      const data = await response.json();
+      console.log('Brand onboarding success:', data);
+      
       // Refresh the user profile to reflect completed onboarding
       await refreshUserProfile();
       
@@ -79,7 +91,7 @@ export default function BrandOnboarding() {
       router.push('/dashboard/brand');
     } catch (error) {
       console.error('Error creating brand profile:', error);
-      setError('Failed to create your profile. Please try again.');
+      setError(error instanceof Error ? error.message : 'Failed to create your profile. Please try again.');
     } finally {
       setLoading(false);
     }

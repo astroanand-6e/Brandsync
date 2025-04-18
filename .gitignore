@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# firebase
+brandsync-345d1-firebase-adminsdk-fbsvc-590edca51a.json
+
 # vercel
 .vercel
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FadeUp, BlurIn } from "@/components/ui/motion";
 import {
   Tabs,
@@ -14,6 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { useAuth } from "@/contexts/AuthContext";
+import { useRouter } from "next/navigation";
 import {
   Instagram,
   Twitter,
@@ -25,7 +27,10 @@ import {
   Heart,
   MessageSquare,
   Users,
-  CheckCircle
+  CheckCircle,
+  Loader2,
+  AlertCircle,
+  CheckCheck
 } from "lucide-react";
 
 const socialAccounts = [
@@ -81,14 +86,166 @@ const pastCollaborations = [
 
 const Workfolio = () => {
   const [activeTab, setActiveTab] = useState("preview");
+  
+  // Add state for form fields
+  const [name, setName] = useState("Jane Doe");
+  const [title, setTitle] = useState("Lifestyle & Travel Content Creator");
+  const [bio, setBio] = useState("Hi, I'm Jane! I create authentic travel and lifestyle content focused on sustainable living and mindful travel. With a community of engaged followers across platforms, I help brands connect with conscious consumers through authentic storytelling and high-quality visuals.");
+  
+  // Add state for niches and content types
+  const [availableNiches, setAvailableNiches] = useState([
+    'Travel', 'Lifestyle', 'Sustainability', 'Photography', 'Fashion', 
+    'Beauty', 'Food', 'Fitness', 'Technology', 'Gaming', 'Business', 'Education'
+  ]);
+  const [selectedNiches, setSelectedNiches] = useState([
+    'Travel', 'Lifestyle', 'Sustainability', 'Photography', 'Fashion'
+  ]);
+  
+  const [availableContentTypes, setAvailableContentTypes] = useState([
+    'Photos', 'Videos', 'Reels', 'Stories', 'Live Streams',
+    'Blog Posts', 'Reviews', 'Tutorials', 'Unboxing'
+  ]);
+  const [selectedContentTypes, setSelectedContentTypes] = useState([
+    'Photos', 'Videos', 'Reels', 'Stories'
+  ]);
 
-  // TODO: Add state for form fields
+  // Toggle functions for niches and content types
+  const toggleNiche = (niche: string) => {
+    setSelectedNiches(prev => 
+      prev.includes(niche) 
+        ? prev.filter(n => n !== niche) 
+        : [...prev, niche]
+    );
+  };
 
-  const handleSaveChanges = (event: React.FormEvent) => {
-    event.preventDefault(); // Prevent default form submission
-    console.log("Save Changes clicked!");
-    // TODO: Gather form data from state
-    // TODO: Call API to save profile data
+  const toggleContentType = (type: string) => {
+    setSelectedContentTypes(prev => 
+      prev.includes(type) 
+        ? prev.filter(t => t !== type) 
+        : [...prev, type]
+    );
+  };
+
+  const { user } = useAuth();
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+  
+  // Fetch profile data when component mounts
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!user) return;
+      
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/profile/details', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch profile');
+        }
+
+        const data = await response.json();
+        if (data.profile) {
+          // Update state with fetched profile data
+          if (data.role === 'INFLUENCER') {
+            const profile = data.profile;
+            setName(`${profile.firstName || ''} ${profile.lastName || ''}`.trim());
+            setBio(profile.bio || '');
+            // Set niches and content types
+            if (profile.niches?.length) {
+              setSelectedNiches(profile.niches.map((niche: { name: string }) => niche.name));
+            }
+            if (profile.contentTypes?.length) {
+              setSelectedContentTypes(profile.contentTypes.map((type: { name: string }) => type.name));
+            }
+            // Get firstName and lastName from full name
+            const nameParts = name.split(' ');
+            const firstName = nameParts[0] || '';
+            const lastName = nameParts.slice(1).join(' ') || '';
+            
+            // For now, use placeholder data for title until we add it to the backend model
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching profile:', err);
+      }
+    };
+
+    if (user) {
+      fetchProfile();
+    }
+  }, [user]);
+
+  const handleSaveChanges = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!user) {
+      router.push('/signin');
+      return;
+    }
+    
+    setLoading(true);
+    setError("");
+    setSuccess(false);
+    
+    try {
+      const token = await user.getIdToken();
+      
+      // Extract first and last name
+      const nameParts = name.split(' ');
+      const firstName = nameParts[0] || '';
+      const lastName = nameParts.slice(1).join(' ') || '';
+      
+      const response = await fetch('/api/profile/influencer', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          bio,
+          // Include the title in the 'bio' field for now since the API doesn't have a dedicated title field
+          // You might want to update your database schema to include title in the future
+          niches: selectedNiches,
+          contentTypes: selectedContentTypes
+          // We're not handling avatar and coverImage in this simple implementation
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to update profile: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.status !== 'success') {
+        throw new Error("Failed to update profile");
+      }
+      
+      setSuccess(true);
+      
+      // Hide success message after 3 seconds
+      setTimeout(() => {
+        setSuccess(false);
+      }, 3000);
+      
+    } catch (err: any) {
+      setError(err.message || 'An error occurred while saving changes');
+      
+      // Hide error message after 5 seconds
+      setTimeout(() => {
+        setError("");
+      }, 5000);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -301,10 +458,24 @@ const Workfolio = () => {
                   <h2 className="text-xl font-semibold mb-6">Edit Your Profile</h2>
                   
                   <div className="space-y-6">
+                    {error && (
+                      <div className="p-4 mb-6 bg-destructive/10 text-destructive rounded-md flex items-center gap-2">
+                        <AlertCircle className="h-4 w-4" />
+                        <p>{error}</p>
+                      </div>
+                    )}
+                    
+                    {success && (
+                      <div className="p-4 mb-6 bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400 rounded-md flex items-center gap-2">
+                        <CheckCheck className="h-4 w-4" />
+                        <p>Profile updated successfully!</p>
+                      </div>
+                    )}
+                    
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
                         <label htmlFor="name" className="text-sm font-medium">Full Name</label>
-                        <Input id="name" defaultValue="Jane Doe" />
+                        <Input id="name" value={name} onChange={(e) => setName(e.target.value)} />
                       </div>
                       <div className="space-y-2">
                         <label htmlFor="username" className="text-sm font-medium">Username</label>
@@ -314,7 +485,7 @@ const Workfolio = () => {
                     
                     <div className="space-y-2">
                       <label htmlFor="title" className="text-sm font-medium">Professional Title</label>
-                      <Input id="title" defaultValue="Lifestyle & Travel Content Creator" />
+                      <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
                     </div>
                     
                     <div className="space-y-2">
@@ -322,39 +493,50 @@ const Workfolio = () => {
                       <Textarea
                         id="bio"
                         rows={4}
-                        defaultValue="Hi, I'm Jane! I create authentic travel and lifestyle content focused on sustainable living and mindful travel. With a community of engaged followers across platforms, I help brands connect with conscious consumers through authentic storytelling and high-quality visuals."
+                        value={bio}
+                        onChange={(e) => setBio(e.target.value)}
                       />
                     </div>
                     
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <label className="text-sm font-medium">Content Niches</label>
-                        <Button variant="ghost" size="sm">
-                          <Plus className="h-4 w-4 mr-2" />
-                          Add Niche
-                        </Button>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        <Badge className="gap-2">
-                          Travel
-                          <button className="h-4 w-4 rounded-full hover:bg-primary-foreground/20">×</button>
-                        </Badge>
-                        <Badge className="gap-2">
-                          Lifestyle
-                          <button className="h-4 w-4 rounded-full hover:bg-primary-foreground/20">×</button>
-                        </Badge>
-                        <Badge className="gap-2">
-                          Sustainability
-                          <button className="h-4 w-4 rounded-full hover:bg-primary-foreground/20">×</button>
-                        </Badge>
-                        <Badge className="gap-2">
-                          Photography
-                          <button className="h-4 w-4 rounded-full hover:bg-primary-foreground/20">×</button>
-                        </Badge>
-                        <Badge className="gap-2">
-                          Fashion
-                          <button className="h-4 w-4 rounded-full hover:bg-primary-foreground/20">×</button>
-                        </Badge>
+                        {availableNiches.map((niche) => (
+                          <Badge
+                            key={niche}
+                            variant={selectedNiches.includes(niche) ? "default" : "outline"}
+                            className="cursor-pointer hover:bg-muted/50 transition-colors"
+                            onClick={() => toggleNiche(niche)}
+                          >
+                            {niche}
+                            {selectedNiches.includes(niche) && (
+                              <span className="ml-1 cursor-pointer">×</span>
+                            )}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-medium">Content Types</label>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {availableContentTypes.map((type) => (
+                          <Badge
+                            key={type}
+                            variant={selectedContentTypes.includes(type) ? "default" : "outline"}
+                            className="cursor-pointer hover:bg-muted/50 transition-colors"
+                            onClick={() => toggleContentType(type)}
+                          >
+                            {type}
+                            {selectedContentTypes.includes(type) && (
+                              <span className="ml-1 cursor-pointer">×</span>
+                            )}
+                          </Badge>
+                        ))}
                       </div>
                     </div>
                     

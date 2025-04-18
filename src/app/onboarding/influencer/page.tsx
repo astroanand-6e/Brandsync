@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/contexts/AuthContext';
 import { OnboardingLayout } from '@/components/onboarding/OnboardingLayout';
-import { prisma } from '@/lib/prisma';
 
 export default function InfluencerOnboarding() {
   const { user, refreshUserProfile } = useAuth();
@@ -90,11 +89,14 @@ export default function InfluencerOnboarding() {
     setError('');
     
     try {
+      const token = await user.getIdToken(); // Get auth token
+
       // Create influencer profile
-      await fetch('/api/onboarding/influencer', {
+      const response = await fetch('/api/onboarding/influencer', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` // Send token in header
         },
         body: JSON.stringify({
           userId: user.uid,
@@ -108,6 +110,15 @@ export default function InfluencerOnboarding() {
         }),
       });
       
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = errorData.error || `Failed with status: ${response.status}`;
+        throw new Error(errorMessage);
+      }
+      
+      const data = await response.json();
+      console.log('Influencer onboarding success:', data);
+      
       // Refresh the user profile to reflect completed onboarding
       await refreshUserProfile();
       
@@ -115,7 +126,7 @@ export default function InfluencerOnboarding() {
       router.push('/dashboard/influencer');
     } catch (error) {
       console.error('Error creating influencer profile:', error);
-      setError('Failed to create your profile. Please try again.');
+      setError(error instanceof Error ? error.message : 'Failed to create your profile. Please try again.');
     } finally {
       setLoading(false);
     }

@@ -9,24 +9,27 @@ export async function POST(request: NextRequest) {
   try {
     console.log('/api/user/create: Starting user creation process');
     
+    // Get token from Authorization header
+    const authorization = request.headers.get('Authorization');
+    if (!authorization?.startsWith('Bearer ')) {
+      return NextResponse.json({ error: 'Unauthorized: Missing token' }, { status: 401 });
+    }
+    
+    const token = authorization.split('Bearer ')[1];
+    
     // Parse the request body
     const body = await request.json();
-    const { idToken, role } = body;
+    const { role } = body;
     
-    console.log('/api/user/create: Received raw body:', {
-      idToken: idToken ? 'token_present' : 'missing',
+    console.log('/api/user/create: Received data:', {
+      token: token ? 'token_present' : 'missing',
       role
     });
     
-    console.log('/api/user/create: Destructured values:', { 
-      idToken: idToken ? 'token_present' : 'missing', 
-      role 
-    });
-    
-    if (!idToken || !role) {
+    if (!token || !role) {
       return NextResponse.json({ 
         error: 'Missing required fields', 
-        details: { idToken: !idToken, role: !role } 
+        details: { token: !token, role: !role } 
       }, { status: 400 });
     }
     
@@ -39,7 +42,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Verify Firebase token
-    const decodedToken = await auth.verifyIdToken(idToken);
+    const decodedToken = await auth.verifyIdToken(token);
     const uid = decodedToken.uid;
     const email = decodedToken.email || '';
     

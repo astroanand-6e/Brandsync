@@ -178,9 +178,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
     } else if (!loading && !user) {
       // If not loading and no user, ensure they aren't stuck on protected pages
-      const protectedPaths = ['/dashboard', '/onboarding', '/workfolio', '/discover', '/messages'];
+      // Removed /workfolio and /discover from this list
+      const protectedPaths = ['/dashboard', '/onboarding', '/messages'];
       if (protectedPaths.some(p => pathname.startsWith(p))) {
-        console.log('Unauthenticated user redirected to signin');
+        console.log('Unauthenticated user redirected to signin from protected path:', pathname);
         router.push('/signin');
       }
     }

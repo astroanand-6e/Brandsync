@@ -4,8 +4,7 @@ import type { NextRequest } from 'next/server';
 // Define protected routes that require authentication
 const protectedRoutes = [
   '/dashboard',
-  '/onboarding',
-  '/workfolio'
+  '/onboarding'
 ];
 
 // Routes that should redirect authenticated users with completed onboarding

@@ -66,10 +66,20 @@ const Navbar = () => {
   // Determine dashboard path based on role
   const dashboardPath = userRole === 'brand' ? '/dashboard/brand' : '/dashboard/influencer';
 
-  // Conditionally add Home or Dashboard link, ensuring type consistency
-  const navLinks: NavLinkItem[] = user
-    ? [{ name: 'Dashboard', path: dashboardPath, icon: LayoutDashboard }, ...baseNavLinks]
-    : [{ name: 'Home', path: '/' }, ...baseNavLinks.filter(link => link.path === '/discover')]; // Only show Discover for logged-out users besides Home
+  // Define nav links for authenticated and unauthenticated users separately
+  const guestNavLinks: NavLinkItem[] = [
+    { name: 'Home', path: '/' },
+    { name: 'Discover', path: '/discover' },
+    { name: 'Workfolio', path: '/workfolio' } // Show Workfolio for demo purposes to guests
+  ];
+
+  const authenticatedNavLinks: NavLinkItem[] = [
+    { name: 'Dashboard', path: dashboardPath, icon: LayoutDashboard },
+    { name: 'Messages', path: '/messages' }
+  ];
+
+  // Use the appropriate set of links based on authentication status
+  const navLinks: NavLinkItem[] = user ? authenticatedNavLinks : guestNavLinks;
 
   const handleSignOut = async () => {
     try {
